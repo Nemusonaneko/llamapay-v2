@@ -92,6 +92,8 @@ contract LlamaPayV2Payer {
         require(msg.sender == owner, "not owner");
         require(_amountPerSec > 0, "cannot send 0 per sec");
         require(_payee != address(0), "cannot send to 0");
+        require(_vaultToken != address(0), "vault token cannot be 0");
+        require(_amountPerSec > 0, "amount per sec cannot be 0");
         
         // Update token info
         uint delta = block.timestamp - tokens[_token].lastPayerUpdate;
@@ -129,6 +131,9 @@ contract LlamaPayV2Payer {
         address payee = ERC721(factory).ownerOf(_id);
         require(msg.sender == owner, "not owner");
         require(payee != address(0), "stream already burned");
+        require(_token != address(0), "token cannot be 0");
+        require(_vaultToken != address(0), "vault token cannot be 0");
+        require(_amountPerSec > 0, "amount per sec cannot be 0");
         // Withdraw and basically cancel the current stream
         (uint withdrawableAmount) = withdrawable(_id);
         withdraw(_id, withdrawableAmount);
