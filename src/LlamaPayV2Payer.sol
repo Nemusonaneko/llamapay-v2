@@ -92,6 +92,7 @@ contract LlamaPayV2Payer {
         require(msg.sender == owner, "not owner");
         require(_amountPerSec > 0, "cannot send 0 per sec");
         require(_payee != address(0), "cannot send to 0");
+        require(_token != address(0), "token cannot be 0");
         require(_vaultToken != address(0), "vault token cannot be 0");
         require(_amountPerSec > 0, "amount per sec cannot be 0");
         
