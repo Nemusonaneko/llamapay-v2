@@ -1,4 +1,4 @@
-//SPDX-License-Identifier: None
+//SPDX-License-Identifier: AGPL-3.0-only
 
 pragma solidity ^0.8.0;
 
@@ -90,6 +90,7 @@ contract LlamaPayV2Payer {
     }
 
     function withdraw(uint _id, uint _amount) public {
+        require(streams[_id].startsAt != 0, "stream paused");
         address payee = ERC721(factory).ownerOf(_id);
         require(payee != address(0), "stream burned");
         (uint toWithdraw) = _withdraw(_id, _amount);
@@ -149,6 +150,32 @@ contract LlamaPayV2Payer {
             startsAt: uint40(block.timestamp),
             vault: _newVault
         });
+
+        if (_newPayee != payee) {
+            ERC721(factory).safeTransferFrom(payee, _newPayee, _id);
+        }
+    }
+
+    function pauseStream(uint _id) external {
+        require(msg.sender == owner, "not owner");
+        require(ERC721(factory).ownerOf(_id) != address(0), "stream burned");
+
+        uint withdrawableAmount =  withdrawable(_id);
+        withdraw(_id, withdrawableAmount);
+        vaults[streams[_id].vault].totalPaidPerSec -= streams[_id].amountPerSec;
+        streams[_id].startsAt = 0;
+    }
+
+    function resumeStream(uint _id) external {
+       require(msg.sender == owner, "not owner");
+       require(ERC721(factory).ownerOf(_id) != address(0), "stream burned");
+       
+        Stream storage stream = streams[_id];
+
+        vaults[stream.vault].balance -= (block.timestamp - vaults[stream.vault].lastUpdate);
+        vaults[stream.vault].totalPaidPerSec += stream.amountPerSec;
+        vaults[stream.vault].lastUpdate = uint40(block.timestamp);
+        streams[_id].startsAt = uint40(block.timestamp);
     }
 
     function transferOwnership(address _futureOwner) external {
