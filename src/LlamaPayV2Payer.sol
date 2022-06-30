@@ -53,7 +53,7 @@ contract LlamaPayV2Payer {
         vaults[_vault].balance -= _amount;
         uint yieldPerToken = yieldEarnedPerToken(_vault);
         uint alreadyStreamed = (block.timestamp - vaults[_vault].lastUpdate) * vaults[_vault].totalPaidPerSec;
-        vaults[_vault].balance += alreadyStreamed * yieldPerToken;
+        vaults[_vault].balance += (alreadyStreamed * yieldPerToken) / 2;
         require(vaults[_vault].balance >= alreadyStreamed, "already streamed > balance");
         ERC20 asset = ERC4626(_vault).asset();
         uint8 decimals = asset.decimals();
