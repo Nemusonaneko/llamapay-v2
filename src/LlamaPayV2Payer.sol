@@ -50,10 +50,10 @@ contract LlamaPayV2Payer {
 
     function withdrawPayer(address _vault, uint _amount) external {
         require(msg.sender == owner, "not owner");
-        uint yieldPerToken = getYieldPerToken(_vault) / 2;
-        vaults[_vault].balance += vaults[_vault].balance * yieldPerToken;
         vaults[_vault].balance -= _amount;
+        uint yieldPerToken = yieldEarnedPerToken(_vault);
         uint alreadyStreamed = (block.timestamp - vaults[_vault].lastUpdate) * vaults[_vault].totalPaidPerSec;
+        vaults[_vault].balance += alreadyStreamed * yieldPerToken;
         require(vaults[_vault].balance >= alreadyStreamed, "already streamed > balance");
         ERC20 asset = ERC4626(_vault).asset();
         uint8 decimals = asset.decimals();
@@ -65,9 +65,6 @@ contract LlamaPayV2Payer {
         Stream storage stream = streams[_id];
         Vault storage vault = vaults[stream.vault];
 
-        uint yieldPerToken = getYieldPerToken(stream.vault) / 2;
-        vaults[stream.vault].balance += vaults[stream.vault].balance * yieldPerToken;
-
         uint paidSinceUpdate = (block.timestamp - vault.lastUpdate) * vault.totalPaidPerSec;
         if (vault.balance >= paidSinceUpdate) {
             vaults[stream.vault].balance -= paidSinceUpdate;
@@ -78,8 +75,11 @@ contract LlamaPayV2Payer {
             vaults[stream.vault].balance = vault.balance % vault.totalPaidPerSec;
         }
 
+        uint yieldPerToken = yieldEarnedPerToken(stream.vault);
         uint available = (vault.lastUpdate - stream.startsAt) * stream.amountPerSec;
-        available += available * yieldPerToken;
+        uint streamYieldEarned = (available * yieldPerToken) / 2;
+        available += streamYieldEarned;
+        vaults[stream.vault].balance += streamYieldEarned;
         require(available >= _amount, "amount > available");
         vaults[stream.vault].balance -= _amount;
         uint streamTimePaid = _amount / stream.amountPerSec;
@@ -188,27 +188,27 @@ contract LlamaPayV2Payer {
         owner = msg.sender;
     }
 
-    function getYieldPerToken(address _vault) public view returns(uint yieldPerToken) {
+    function yieldEarnedPerToken(address _vault) public view returns(uint earned) {
         Vault storage vault = vaults[_vault];
         uint shares = ERC4626(_vault).balanceOf(address(this));
-        uint totalSharesToAssets = ERC4626(_vault).convertToAssets(shares);
-        yieldPerToken = (totalSharesToAssets / vault.balance) / vault.balance;
+        uint sharesToAssets = ERC4626(_vault).convertToAssets(shares);
+        earned = (sharesToAssets / vault.balance) / vault.balance;
     }
 
     function withdrawable(uint _id) public view returns (uint withdrawableAmount) {
         Stream storage stream = streams[_id];
         Vault storage vault = vaults[stream.vault];
-        uint yieldPerToken = getYieldPerToken(stream.vault);
         uint paidSinceUpdate = (block.timestamp - vault.lastUpdate) * vault.totalPaidPerSec;
-        paidSinceUpdate += yieldPerToken * paidSinceUpdate;
         uint lastPayerUpdate;
         if (vault.balance >= paidSinceUpdate) {
             lastPayerUpdate = block.timestamp;
         } else {
             lastPayerUpdate = vault.lastUpdate + (vault.balance / vault.totalPaidPerSec);
         }
+        uint yieldPerToken = yieldEarnedPerToken(stream.vault);
         withdrawableAmount = lastPayerUpdate - vault.lastUpdate * stream.amountPerSec;
-        withdrawableAmount += withdrawableAmount * yieldPerToken;
+        uint streamYieldEarned = (withdrawableAmount * yieldPerToken) / 2;
+        withdrawableAmount += streamYieldEarned;
     }
 
 
