@@ -99,6 +99,7 @@ contract LlamaPayV2Payer {
         _updateVault(_vault);
         ERC20 asset = ERC4626(_vault).asset();
         uint toWithdraw = tokens[_vault].earnedYield / (10 ** (20 - asset.decimals()));
+        tokens[_vault].earnedYield = 0;
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
     }
 
