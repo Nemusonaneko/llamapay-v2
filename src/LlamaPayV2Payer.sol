@@ -92,6 +92,16 @@ contract LlamaPayV2Payer {
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
     }
 
+    /// @notice Withdraw earned yield for payee
+    /// @param _vault vault to withdraw from
+    function withdrawPayerYield(address _vault) external {
+        require(msg.sender == owner, "not owner");
+        _updateVault(_vault);
+        ERC20 asset = ERC4626(_vault).asset();
+        uint toWithdraw = tokens[_vault].earnedYield / (10 ** (20 - asset.decimals()));
+        ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
+    }
+
     /// @notice Withdraw streamed tokens for payee
     /// @param _id token id
     /// @param _amount amount to withdraw (20 decimals)
@@ -105,8 +115,25 @@ contract LlamaPayV2Payer {
         uint earnedPerToken = yieldEarnedPerToken(vaults[_id]);
         streams[_id].earnedYield += available * earnedPerToken;
         require(available >= _amount, "amount > available");
+        streams[_id].lastUpdate += uint40(_amount / streams[_id].amountPerSec);
         ERC20 asset = ERC4626(vaults[_id]).asset();
         uint toWithdraw = _amount / (10 ** (20 - asset.decimals()));
+        ERC4626(vaults[_id]).withdraw(toWithdraw, payee, address(this));
+    } 
+
+    /// @notice Withdraw earned yield for payee
+    /// @param _id token id
+    function withdrawYield(uint _id) external {
+        address payee = ERC721(factory).ownerOf(_id);
+        require(payee != address(0), "stream burned");
+        _updateVault(vaults[_id]);
+        uint delta = tokens[vaults[_id]].lastUpdate - streams[_id].lastUpdate;
+        uint available = delta * streams[_id].amountPerSec;
+        uint earnedPerToken = yieldEarnedPerToken(vaults[_id]);
+        streams[_id].earnedYield += available * earnedPerToken;
+        ERC20 asset = ERC4626(vaults[_id]).asset();
+        uint toWithdraw =  streams[_id].earnedYield / (10 ** (20 - asset.decimals()));
+        streams[_id].earnedYield = 0;
         ERC4626(vaults[_id]).withdraw(toWithdraw, payee, address(this));
     }
 
