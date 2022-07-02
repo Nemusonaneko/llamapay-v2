@@ -82,22 +82,22 @@ contract LlamaPayV2Payer {
         require(msg.sender == owner, "not owner");
 
         _updateVault(_vault);
-        uint delta = block.timestamp - tokens[_vault].lastUpdate;
-        uint amountPaid = delta * tokens[_vault].totalPaidPerSec;
         tokens[_vault].balance -= _amount;
 
-        require(tokens[_vault].balance >= amountPaid, "already streamed > available");
+        require(block.timestamp == tokens[_vault].lastUpdate, "already streamed > available");
         ERC20 asset = ERC4626(_vault).asset();
         uint toWithdraw = _amount / (10 ** (20 - asset.decimals()));
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
     }
 
-    /// @notice Withdraw earned yield for payee
+    /// @notice Withdraw earned yield for payer
     /// @param _vault vault to withdraw from
     function withdrawPayerYield(address _vault) external {
         require(msg.sender == owner, "not owner");
         _updateVault(_vault);
         ERC20 asset = ERC4626(_vault).asset();
+        // FIX: missed the fact that earnedYield also earns yield
+        // FIX: better to cycle yield into balance? that way yield must be used to pay debts too
         uint toWithdraw = tokens[_vault].earnedYield / (10 ** (20 - asset.decimals()));
         tokens[_vault].earnedYield = 0;
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
@@ -107,6 +107,7 @@ contract LlamaPayV2Payer {
     /// @param _id token id
     /// @param _amount amount to withdraw (20 decimals)
     function withdraw(uint _id, uint _amount) external {
+        // FIX: get all elements from mappings only once
         require(streams[_id].lastUpdate != 0, "stream paused");
         address payee = ERC721(factory).ownerOf(_id);
         require(payee != address(0), "stream burned");
@@ -114,7 +115,7 @@ contract LlamaPayV2Payer {
         uint delta = tokens[vaults[_id]].lastUpdate - streams[_id].lastUpdate;
         uint available = delta * streams[_id].amountPerSec;
         uint earnedPerToken = yieldEarnedPerToken(vaults[_id]);
-        streams[_id].earnedYield += available * earnedPerToken;
+        streams[_id].earnedYield += available * earnedPerToken; // FIX: this is wrong, you need to take into account from when should you count the yield
         require(available >= _amount, "amount > available");
         streams[_id].lastUpdate += uint40(_amount / streams[_id].amountPerSec);
         ERC20 asset = ERC4626(vaults[_id]).asset();
@@ -260,6 +261,7 @@ contract LlamaPayV2Payer {
         ERC20 asset = ERC4626(_vault).asset();
         uint deposited = tokens[_vault].balance / (10 ** (20 - asset.decimals()));
         uint redeemable = ERC4626(_vault).convertToAssets(shares);
+        // FIX: if I run this twice I'll get earnedPerToken > 0 twice, which makes it possible to drain everything
         earnedPerToken = ((redeemable - deposited) / deposited) / 2;
     }
 
