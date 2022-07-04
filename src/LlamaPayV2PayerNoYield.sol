@@ -8,6 +8,7 @@ import {ERC721} from "solmate/tokens/ERC721.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 
 interface Factory {
+    function parameter() external view returns (address);
     function mint(address _recipient) external returns (uint id);
     function burn(uint id) external returns (bool);
 }
@@ -37,9 +38,9 @@ contract LlamaPayV2PayerNoYield {
     mapping(uint => Stream) streams;
     mapping(uint => address) streamedToken;
 
-    constructor(address _payer) {
+    constructor() {
         factory = msg.sender;
-        owner = _payer;
+        owner = Factory(msg.sender).parameter();
     }
 
     function _updateToken(address _token) private {
