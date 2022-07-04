@@ -3,7 +3,7 @@
 pragma solidity ^0.8.0;
 
 import {ERC721} from "solmate/tokens/ERC721.sol";
-import "./LlamaPayV2Payer.sol";
+import "./LlamaPayV2PayerNoYield.sol";
 
 /// @title LlamaPay V2 Factory Contract
 /// @author nemusona
@@ -12,9 +12,9 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
     uint public tokenId;
     uint public llamaPayIndex;
 
-    mapping(uint => address) llamaPayContracts;
-    mapping(address => uint) llamaPayAddressToIndex;
-    mapping(uint => address) tokenIdToLlamaPayAddress;
+    mapping(uint => address) public llamaPayContracts;
+    mapping(address => uint) public llamaPayAddressToIndex;
+    mapping(uint => address) public tokenIdToLlamaPayAddress;
 
     constructor() {
         llamaPayIndex = 1;
@@ -24,10 +24,10 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
     /// @notice create a llamapay contract for payer
     /// @param _payer owner of new contract
     function createLlamaPayContract(address _payer) external {
-        address llamapay = address(new LlamaPayV2Payer(_payer));
-        llamaPayContracts[llamaPayIndex] = llamapay;
-        llamaPayAddressToIndex[llamapay] = llamaPayIndex;
         unchecked {
+            address llamapay = address(new LlamaPayV2PayerNoYield(_payer));
+            llamaPayContracts[llamaPayIndex] = llamapay;
+            llamaPayAddressToIndex[llamapay] = llamaPayIndex;
             llamaPayIndex++;
         }
     }
@@ -36,9 +36,9 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
     /// @param _recipient payee
     function mint(address _recipient) external returns (uint id) {
         require(llamaPayAddressToIndex[msg.sender] != 0, "msg.sender not payer contract");
-        id = tokenId;
-        _safeMint(_recipient, id);
         unchecked {    
+            id = tokenId;
+            _safeMint(_recipient, id);
             tokenIdToLlamaPayAddress[id] = msg.sender;
             tokenId++;
         }
@@ -49,7 +49,9 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
     /// @param _id token id
     function burn(uint _id) external returns (bool) {
         require(msg.sender == tokenIdToLlamaPayAddress[_id], "msg.sender not payer contract");
-        _burn(_id);
+        unchecked {
+            _burn(_id);
+        }
         return true;
     }
 
