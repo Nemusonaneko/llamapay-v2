@@ -24,10 +24,11 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
 
     /// @notice create a llamapay contract for payer
     /// @param _payer owner of new contract
-    function createLlamaPayContract(address _payer) external {
+    function createLlamaPayContract(address _payer) external returns(LlamaPayV2PayerNoYield payerContract) {
         unchecked {
             parameter = _payer;
-            address llamapay = address(new LlamaPayV2PayerNoYield(_payer));
+            payerContract = new LlamaPayV2PayerNoYield();
+            address llamapay = address(payerContract);
             llamaPayContracts[llamaPayIndex] = llamapay;
             llamaPayAddressToIndex[llamapay] = llamaPayIndex;
             llamaPayIndex++;
