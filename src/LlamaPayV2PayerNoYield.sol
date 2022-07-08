@@ -138,10 +138,13 @@ contract LlamaPayV2PayerNoYield {
         ERC20(streamedToken[_id]).safeTransfer(payee, canWithdraw);
         tokens[streamedToken[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
 
-        _updateToken(_newToken);
+        if (_newToken != streamedToken[_id]) {
+            _updateToken(_newToken);
+            streamedToken[_id] = _newToken;
+        }
         require(tokens[_newToken].lastUpdate == block.timestamp, "in debt");
         tokens[_newToken].totalPaidPerSec += _newAmountPerSec;
-        streamedToken[_id] = _newToken;
+        
 
         streams[_id] = Stream({
             amountPerSec: _newAmountPerSec,
