@@ -11,22 +11,24 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
 
     uint public tokenId;
     uint public llamaPayIndex;
-    address public parameter;
+    address public payer;
+    address immutable public bot;
 
     mapping(uint => address) public llamaPayContracts;
     mapping(address => uint) public llamaPayAddressToIndex;
     mapping(uint => address) public tokenIdToLlamaPayAddress;
 
-    constructor() {
+    constructor(address _bot) {
         llamaPayIndex = 1;
         tokenId = 1;
+        bot = _bot;
     }
 
     /// @notice create a llamapay contract for payer
     /// @param _payer owner of new contract
     function createLlamaPayContract(address _payer) external returns(LlamaPayV2Payer payerContract) {
         unchecked {
-            parameter = _payer;
+            payer = _payer;
             payerContract = new LlamaPayV2Payer();
             address llamapay = address(payerContract);
             llamaPayContracts[llamaPayIndex] = llamapay;

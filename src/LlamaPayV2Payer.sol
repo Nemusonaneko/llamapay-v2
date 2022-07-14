@@ -8,7 +8,8 @@ import {ERC721} from "solmate/tokens/ERC721.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 
 interface Factory {
-    function parameter() external view returns (address);
+    function payer() external view returns (address);
+    function bot() external view returns (address);
     function mint(address _recipient) external returns (bool, uint id);
     function burn(uint id) external returns (bool);
     function transferToken( address _from, address _to, uint _id) external returns (bool);
@@ -32,6 +33,7 @@ contract LlamaPayV2Payer {
     }
 
     address immutable public factory;
+    address immutable public bot;
     address public owner;
     address public futureOwner;
 
@@ -41,7 +43,8 @@ contract LlamaPayV2Payer {
 
     constructor() {
         factory = msg.sender;
-        owner = Factory(msg.sender).parameter();
+        owner = Factory(msg.sender).payer();
+        bot = Factory(msg.sender).bot();
     }
 
     /// @notice Deposit into payer contract. Allows for deposit on behalf of owner.
@@ -113,7 +116,7 @@ contract LlamaPayV2Payer {
     }
 
     function createStream(address _vault, address _payee, uint216 _amountPerSec) external {
-        require(msg.sender == owner, "not owner");
+        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
         require(_payee != address(0), "cannot send to 0");
         require(_vault != address(0), "vault cannot be 0");
         require(_amountPerSec > 0, "amount per sec cannot be 0");
@@ -133,7 +136,7 @@ contract LlamaPayV2Payer {
     /// @notice cancel and burn stream
     /// @param _id token id
     function cancelStream(uint _id) external {
-        require(msg.sender == owner, "not owner");
+        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
         uint withdrawable = getWithdrawable(_id);
         withdraw(_id, withdrawable);
         vaults[streamedFrom[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
@@ -146,7 +149,7 @@ contract LlamaPayV2Payer {
     /// @notice "cancel stream" without burning the nft so you can resume it later
     /// @param _id token id
     function pauseStream(uint _id) external {
-        require(msg.sender == owner, "not owner");
+        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
         uint withdrawable = getWithdrawable(_id);
         withdraw(_id, withdrawable);
         vaults[streamedFrom[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
@@ -155,19 +158,19 @@ contract LlamaPayV2Payer {
     /// @notice resume a paused stream essentially creating stream without minting new token
     /// @param _id token id
     function resumeStream(uint _id) external {
-        require(msg.sender == owner, "not owner");
+        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
         require(ERC721(factory).ownerOf(_id) != address(0), "stream burned");
         Stream storage stream = streams[_id];
-        require(stream.lastUpdate == 0, "stream is not paused");
+        require(stream.lastStreamUpdate == 0, "stream is not paused");
         address vault = streamedFrom[_id];
-        updateVault(vault);
+        _updateVault(vault);
         require(vaults[vault].lastUpdate == block.timestamp, "in debt");
-        streams[_id].lastUpdate = uint40(block.timestamp);
+        streams[_id].lastStreamUpdate = uint40(block.timestamp);
         vaults[vault].totalPaidPerSec += stream.amountPerSec;
     }
 
     function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
-        require(msg.sender == owner, "not owner");
+        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
 
         uint withdrawable = getWithdrawable(_id);
         withdraw(_id, withdrawable);
@@ -231,6 +234,15 @@ contract LlamaPayV2Payer {
             lastPayerUpdate = vault.lastUpdate + (vault.balance / vault.totalPaidPerSec);
         }
         withdrawable = (lastPayerUpdate - stream.lastStreamUpdate) * stream.amountPerSec;
+    }
+
+    /// @notice get yield earned from stream
+    /// @param _id token id
+    /// @return yieldEarnedByStream yield earned (20 decimals)
+    function getYieldEarnedByStream(uint _id) external view returns (uint yieldEarnedByStream) {
+        uint withdrawable = getWithdrawable(_id);
+        uint earnedPerToken = getEarnedPerToken(streamedFrom[_id]);
+        yieldEarnedByStream = withdrawable * earnedPerToken;
     }
 
 
