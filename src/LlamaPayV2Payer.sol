@@ -8,8 +8,10 @@ import {ERC721} from "solmate/tokens/ERC721.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 
 interface Factory {
-    function mint(address _recipient) external returns (uint id);
+    function parameter() external view returns (address);
+    function mint(address _recipient) external returns (bool, uint id);
     function burn(uint id) external returns (bool);
+    function transferToken( address _from, address _to, uint _id) external returns (bool);
 }
 
 /// @title LlamaPay V2 Payer Contract
@@ -19,130 +21,97 @@ contract LlamaPayV2Payer {
     using SafeTransferLib for ERC20;
 
     struct Stream {
-        uint earnedYield;
         uint216 amountPerSec;
-        uint40 lastUpdate;
+        uint40 lastStreamUpdate;
     }
 
-    struct Token {
+    struct Vault {
         uint balance;
-        uint earnedYield;
-        uint216 totalPaidPerSec;
         uint40 lastUpdate;
+        uint216 totalPaidPerSec;
     }
 
     address immutable public factory;
     address public owner;
     address public futureOwner;
 
-    mapping(address => Token) tokens;
-    mapping(uint => Stream) streams;
-    mapping(uint => address) vaults; // Maps streamId to vault where the streamed tokens are earning yield
-    
-    constructor(address _payer) {
-        factory = msg.sender;
-        owner = _payer;
-    }
+    mapping(address => Vault) public vaults;
+    mapping(uint => Stream) public streams;
+    mapping(uint => address) public streamedFrom;
 
-    /// @notice updates vault balances and earned yield
-    /// @param _vault vault to be updated
-    function _updateVault(address _vault) private {
-        uint delta = block.timestamp - tokens[_vault].lastUpdate;
-        uint streamedSinceUpdate = delta * tokens[_vault].totalPaidPerSec;
-        uint earnedPerToken = yieldEarnedPerToken(_vault);
-        if (tokens[_vault].balance >= streamedSinceUpdate) {
-            tokens[_vault].balance -= streamedSinceUpdate;
-            tokens[_vault].earnedYield += streamedSinceUpdate * earnedPerToken;
-            tokens[_vault].lastUpdate = uint40(block.timestamp);
-        } else {
-            uint timePaid = tokens[_vault].balance / tokens[_vault].totalPaidPerSec;
-            uint tokensStreamed = timePaid * tokens[_vault].totalPaidPerSec;
-            tokens[_vault].balance -= tokensStreamed;
-            tokens[_vault].earnedYield += tokensStreamed * earnedPerToken;
-            tokens[_vault].lastUpdate += uint40(timePaid);
-        }
+    constructor() {
+        factory = msg.sender;
+        owner = Factory(msg.sender).parameter();
     }
 
     /// @notice Deposit into payer contract. Allows for deposit on behalf of owner.
-    /// @param _asset the underlying token to be deposited into vault
+    /// @param _token the token to be streamed
     /// @param _vault the ERC4626 vault token to deposit into
-    /// @param _amount amount of tokens to deposit
-    function deposit(address _asset, address _vault, uint _amount) external {
-        ERC20(_asset).safeTransferFrom(msg.sender, address(this), _amount);
-        ERC20(_asset).safeApprove(_vault, _amount);
+    /// @param _amount amount of tokens to deposit into vault
+    function deposit(address _token, address _vault, uint _amount) external {
+        ERC20(_token).safeTransferFrom(msg.sender, address(this), _amount);
+        ERC20(_token).safeApprove(_vault, _amount); 
         ERC4626(_vault).deposit(_amount, address(this));
-        uint8 decimals = ERC20(_asset).decimals();
-        tokens[_vault].balance += _amount * (10 ** (20 - decimals));
-    } 
+        uint8 decimals = ERC20(_token).decimals();
+        vaults[_vault].balance += _amount * (10 ** (20 - decimals));
+    }
 
-    /// @notice Withdraw a certain amount of unstreamed tokens for payer
+    /// @notice updates vault balances and distribute yield to payer
+    /// @param _vault vault to be updated
+    function _updateVault(address _vault) private {
+        uint totalPaidPerSec = vaults[_vault].totalPaidPerSec;
+        uint totalStreamed = (block.timestamp - vaults[_vault].lastUpdate) * totalPaidPerSec;
+        uint balance = vaults[_vault].balance;
+
+        if (balance >= totalStreamed) {
+            vaults[_vault].balance -= totalStreamed;
+            vaults[_vault].lastUpdate = uint40(block.timestamp);
+        } else {
+            uint timePaid = balance / totalPaidPerSec;
+            vaults[_vault].balance = balance % totalPaidPerSec;
+            vaults[_vault].lastUpdate += uint40(timePaid);
+        }
+    }
+
+    /// @notice withdraw unstreamed tokens from vault
     /// @param _vault vault to withdraw from
     /// @param _amount amount to withdraw (20 decimals)
     function withdrawPayer(address _vault, uint _amount) external {
         require(msg.sender == owner, "not owner");
-
+        
         _updateVault(_vault);
-        tokens[_vault].balance -= _amount;
+        vaults[_vault].balance -= _amount;
 
-        require(block.timestamp == tokens[_vault].lastUpdate, "already streamed > available");
-        ERC20 asset = ERC4626(_vault).asset();
-        uint toWithdraw = _amount / (10 ** (20 - asset.decimals()));
+        require(block.timestamp == vaults[_vault].lastUpdate, "in debt");
+
+        uint8 decimals = ERC4626(_vault).asset().decimals();
+        uint toWithdraw = _amount / (10 ** (20 - decimals));
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
     }
 
-    /// @notice Withdraw earned yield for payer
-    /// @param _vault vault to withdraw from
-    function withdrawPayerYield(address _vault) external {
-        require(msg.sender == owner, "not owner");
-        _updateVault(_vault);
-        ERC20 asset = ERC4626(_vault).asset();
-        // FIX: missed the fact that earnedYield also earns yield
-        // FIX: better to cycle yield into balance? that way yield must be used to pay debts too
-        uint toWithdraw = tokens[_vault].earnedYield / (10 ** (20 - asset.decimals()));
-        tokens[_vault].earnedYield = 0;
-        ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
-    }
-
-    /// @notice Withdraw streamed tokens for payee
-    /// @param _id token id
+    /// @notice withdraw tokens to payee
+    /// @param _id token id to withdraw
     /// @param _amount amount to withdraw (20 decimals)
-    function withdraw(uint _id, uint _amount) external {
-        // FIX: get all elements from mappings only once
-        require(streams[_id].lastUpdate != 0, "stream paused");
-        address payee = ERC721(factory).ownerOf(_id);
-        require(payee != address(0), "stream burned");
-        _updateVault(vaults[_id]);
-        uint delta = tokens[vaults[_id]].lastUpdate - streams[_id].lastUpdate;
-        uint available = delta * streams[_id].amountPerSec;
-        uint earnedPerToken = yieldEarnedPerToken(vaults[_id]);
-        streams[_id].earnedYield += available * earnedPerToken; // FIX: this is wrong, you need to take into account from when should you count the yield
-        require(available >= _amount, "amount > available");
-        streams[_id].lastUpdate += uint40(_amount / streams[_id].amountPerSec);
-        ERC20 asset = ERC4626(vaults[_id]).asset();
-        uint toWithdraw = _amount / (10 ** (20 - asset.decimals()));
-        ERC4626(vaults[_id]).withdraw(toWithdraw, payee, address(this));
-    } 
+    function withdraw(uint _id, uint _amount) public {
+        Stream storage stream = streams[_id];
+        require(stream.lastStreamUpdate != 0, "stream paused");
 
-    /// @notice Withdraw earned yield for payee
-    /// @param _id token id
-    function withdrawYield(uint _id) external {
+        address from = streamedFrom[_id];
         address payee = ERC721(factory).ownerOf(_id);
         require(payee != address(0), "stream burned");
-        _updateVault(vaults[_id]);
-        uint delta = tokens[vaults[_id]].lastUpdate - streams[_id].lastUpdate;
-        uint available = delta * streams[_id].amountPerSec;
-        uint earnedPerToken = yieldEarnedPerToken(vaults[_id]);
-        streams[_id].earnedYield += available * earnedPerToken;
-        ERC20 asset = ERC4626(vaults[_id]).asset();
-        uint toWithdraw =  streams[_id].earnedYield / (10 ** (20 - asset.decimals()));
-        streams[_id].earnedYield = 0;
-        ERC4626(vaults[_id]).withdraw(toWithdraw, payee, address(this));
+        _updateVault(from);
+        Vault storage vault = vaults[from];
+        uint availableToWithdraw = (vault.lastUpdate - stream.lastStreamUpdate) * stream.amountPerSec;
+        require(availableToWithdraw >= _amount, "available < amount to withdraw");
+        uint earnedPerToken = getEarnedPerToken(from) / 2;
+        streams[_id].lastStreamUpdate += uint40(_amount / stream.amountPerSec);
+        uint8 decimals = ERC4626(from).asset().decimals();
+        uint yieldEarned = _amount * earnedPerToken;
+        vaults[from].balance += yieldEarned;
+        uint toWithdraw = (_amount + yieldEarned) / (10 ** (20 - decimals));
+        ERC4626(from).withdraw(toWithdraw, payee, address(this));
     }
 
-    /// @notice creates a new stream for payee
-    /// @param _vault vault that tokens are earning yield and streamed from
-    /// @param _payee recipient of stream
-    /// @param _amountPerSec amount streamed per second (20 decimals)
     function createStream(address _vault, address _payee, uint216 _amountPerSec) external {
         require(msg.sender == owner, "not owner");
         require(_payee != address(0), "cannot send to 0");
@@ -150,97 +119,82 @@ contract LlamaPayV2Payer {
         require(_amountPerSec > 0, "amount per sec cannot be 0");
 
         _updateVault(_vault);
-        require(tokens[_vault].lastUpdate == block.timestamp, "payer in debt");
-        tokens[_vault].totalPaidPerSec += _amountPerSec;
-        uint id = Factory(factory).mint(_payee);
+        require(vaults[_vault].lastUpdate == block.timestamp, "in debt");
+        (bool minted, uint id) = Factory(factory).mint(_payee);
+        require(minted, "failed to mint token");
+        vaults[_vault].totalPaidPerSec += _amountPerSec;
         streams[id] = Stream({
             amountPerSec: _amountPerSec,
-            lastUpdate: uint40(block.timestamp),
-            earnedYield: 0
+            lastStreamUpdate: uint40(block.timestamp)
         });
-        vaults[id] = _vault;
+        streamedFrom[id] = _vault;
     }
 
-    /// @notice cancel and burn stream for payee
-    /// @param _id token ID
+    /// @notice cancel and burn stream
+    /// @param _id token id
     function cancelStream(uint _id) external {
-        address payee = ERC721(factory).ownerOf(_id);
-        address vault = vaults[_id];
         require(msg.sender == owner, "not owner");
-        require( payee != address(0), "stream already burned");
-        _updateVault(vault);
-        (uint withdrawableAmt, uint yieldEarned) = withdrawable(_id);
-        uint toWithdraw = withdrawableAmt + yieldEarned;
-        ERC4626(vault).withdraw(toWithdraw, payee, address(this));
+        uint withdrawable = getWithdrawable(_id);
+        withdraw(_id, withdrawable);
+        vaults[streamedFrom[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
+        streams[_id].amountPerSec = 0;
+        streams[_id].lastStreamUpdate = 0;
         bool burned = Factory(factory).burn(_id);
         require(burned, "failed to burn stream");
-        tokens[vault].totalPaidPerSec -= streams[_id].amountPerSec;
-    }
-
-    /// @notice modify stream for payee
-    /// @param _id token id
-    /// @param _newVault new vault for yield and streaming
-    /// @param _newPayee new payee to stream to 
-    /// @param _newAmountPerSec new AmtPerSec to stream (20 decimals)
-    function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
-        address payee = ERC721(factory).ownerOf(_id);
-        require(msg.sender == owner, "not owner");
-        require(payee != address(0), "stream already burned");
-        require(_newVault != address(0), "new vault cannot be 0");
-        require(_newPayee != address(0), "new payee cannot be 0");
-        require(_newAmountPerSec > 0, "new amtpersec needs to be > 0"); 
-
-        _updateVault(vaults[_id]);
-        (uint withdrawableAmt, uint yieldEarned) = withdrawable(_id);
-        uint toWithdraw = withdrawableAmt + yieldEarned;
-        ERC4626(vaults[_id]).withdraw(toWithdraw, payee, address(this));
-        tokens[vaults[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
-
-        _updateVault(_newVault);
-        require(tokens[_newVault].lastUpdate == block.timestamp, "payer in debt");
-        tokens[_newVault].totalPaidPerSec += _newAmountPerSec;
-        vaults[_id] = _newVault;
-
-        streams[_id] = Stream({
-            amountPerSec: _newAmountPerSec,
-            lastUpdate: uint40(block.timestamp),
-            earnedYield: 0
-        });
-
-        if (_newPayee != payee) {
-            ERC721(factory).safeTransferFrom(payee, _newPayee, _id);
-        }
     }
 
     /// @notice "cancel stream" without burning the nft so you can resume it later
     /// @param _id token id
     function pauseStream(uint _id) external {
-        address payee = ERC721(factory).ownerOf(_id);
         require(msg.sender == owner, "not owner");
-        require(payee != address(0), "stream burned");
-        _updateVault(vaults[_id]);
-        (uint withdrawableAmt, uint yieldEarned) = withdrawable(_id);
-        uint toWithdraw = withdrawableAmt + yieldEarned;
-        ERC4626(vaults[_id]).withdraw(toWithdraw, payee, address(this));
-        tokens[vaults[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
-        streams[_id].lastUpdate = 0;
+        uint withdrawable = getWithdrawable(_id);
+        withdraw(_id, withdrawable);
+        vaults[streamedFrom[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
+        streams[_id].lastStreamUpdate = 0;
     }
-
-    /// @notice resume a paused stream
+    /// @notice resume a paused stream essentially creating stream without minting new token
     /// @param _id token id
     function resumeStream(uint _id) external {
-       require(msg.sender == owner, "not owner");
-       require(ERC721(factory).ownerOf(_id) != address(0), "stream burned");
-       require(streams[_id].lastUpdate == 0, "stream is not paused");
-       
-       _updateVault(vaults[_id]);
-       require(tokens[vaults[_id]].lastUpdate == block.timestamp, "payer in debt");
-       streams[_id].lastUpdate = uint40(block.timestamp);
-       tokens[vaults[_id]].totalPaidPerSec += streams[_id].amountPerSec;
+        require(msg.sender == owner, "not owner");
+        require(ERC721(factory).ownerOf(_id) != address(0), "stream burned");
+        Stream storage stream = streams[_id];
+        require(stream.lastUpdate == 0, "stream is not paused");
+        address vault = streamedFrom[_id];
+        updateVault(vault);
+        require(vaults[vault].lastUpdate == block.timestamp, "in debt");
+        streams[_id].lastUpdate = uint40(block.timestamp);
+        vaults[vault].totalPaidPerSec += stream.amountPerSec;
+    }
+
+    function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
+        require(msg.sender == owner, "not owner");
+
+        uint withdrawable = getWithdrawable(_id);
+        withdraw(_id, withdrawable);
+
+        address oldVault = streamedFrom[_id];
+
+        if (oldVault != _newVault) {
+            _updateVault(_newVault);
+        }
+        require(vaults[_newVault].lastUpdate == block.timestamp, "payer in debt");
+
+        vaults[oldVault].totalPaidPerSec -= streams[_id].amountPerSec;
+        vaults[_newVault].totalPaidPerSec += _newAmountPerSec;
+        streamedFrom[_id] = _newVault;
+        streams[_id].amountPerSec = _newAmountPerSec;
+        streams[_id].lastStreamUpdate = uint40(block.timestamp);
+
+        address payee = ERC721(factory).ownerOf(_id);
+        if (payee != _newPayee) {
+            bool transferred = Factory(factory).transferToken(payee, _newPayee, _id);
+            require(transferred, "failed to transfer stream");
+        }
+
     }
 
     /// @notice Change future owner 
-    /// @param _futureOwner futuer owner
+    /// @param _futureOwner future owner
     function transferOwnership(address _futureOwner) external {
     require(msg.sender == owner, "not owner");
         futureOwner = _futureOwner;
@@ -252,37 +206,32 @@ contract LlamaPayV2Payer {
         owner = msg.sender;
     }
 
-    /// @notice Get share of yield per token earned by tokens deposited by this contract
-    /// (redeemable assets - deposited assets) / deposited assets = yield earned per token
-    /// @param _vault vault to query
-    /// @return earnedPerToken amount of yield earned per token deposited (native decimals)
-    function yieldEarnedPerToken(address _vault) public view returns (uint earnedPerToken) {
+    /// @notice gets yield earned per token 
+    /// @param _vault vault
+    /// @return earnedPerToken yield earned per token (20 decimals)
+    function getEarnedPerToken(address _vault) public view returns (uint earnedPerToken) {
+        uint8 decimals = ERC4626(_vault).asset().decimals();
         uint shares = ERC4626(_vault).balanceOf(address(this));
-        ERC20 asset = ERC4626(_vault).asset();
-        uint deposited = tokens[_vault].balance / (10 ** (20 - asset.decimals()));
-        uint redeemable = ERC4626(_vault).convertToAssets(shares);
-        // FIX: if I run this twice I'll get earnedPerToken > 0 twice, which makes it possible to drain everything
-        earnedPerToken = ((redeemable - deposited) / deposited) / 2;
+        uint redeemable = ERC4626(_vault).convertToAssets(shares) * (10 ** (20 - decimals));
+        uint deposited = vaults[_vault].balance;
+        earnedPerToken = (redeemable - deposited) / deposited;
     }
 
-    /// @notice Get withdrawable amount from specific stream 
-    /// @param _id token ID for stream
-    /// @return withdrawableAmt amount available for withdrawal (native decimals)
-    /// @return yieldEarned yield available for withdrawal (native decimals)
-    function withdrawable(uint _id) public view returns (uint withdrawableAmt, uint yieldEarned) {
-        uint earnedPerToken = yieldEarnedPerToken(vaults[_id]);
-        uint delta = block.timestamp - tokens[vaults[_id]].lastUpdate;
-        uint streamedSinceUpdate = delta * tokens[vaults[_id]].totalPaidPerSec;
+    /// @notice withdrawable tokens from stream id
+    /// @param _id token id 
+    /// @return withdrawable (20 decimals)
+    function getWithdrawable(uint _id) public view returns (uint withdrawable) {
+        Stream storage stream = streams[_id];
+        Vault storage vault = vaults[streamedFrom[_id]];
+        uint totalStreamed = (block.timestamp - vault.lastUpdate) * vault.totalPaidPerSec;
         uint lastPayerUpdate;
-        if (tokens[vaults[_id]].balance >= streamedSinceUpdate) {
+        if (vault.balance >= totalStreamed) {
             lastPayerUpdate = block.timestamp;
         } else {
-            lastPayerUpdate = tokens[vaults[_id]].lastUpdate + (tokens[vaults[_id]].balance/ tokens[vaults[_id]].totalPaidPerSec);
+            lastPayerUpdate = vault.lastUpdate + (vault.balance / vault.totalPaidPerSec);
         }
-        uint payeeDelta = (lastPayerUpdate - streams[_id].lastUpdate);
-        ERC20 asset = ERC4626(vaults[_id]).asset();
-        uint8 decimals = asset.decimals();
-        withdrawableAmt = (payeeDelta * streams[_id].amountPerSec) / (10 ** (20 - decimals));
-        yieldEarned = (streams[_id].earnedYield + (withdrawableAmt * earnedPerToken)) / (10 ** (20 - decimals));
+        withdrawable = (lastPayerUpdate - stream.lastStreamUpdate) * stream.amountPerSec;
     }
+
+
 }

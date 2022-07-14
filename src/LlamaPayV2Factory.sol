@@ -3,7 +3,7 @@
 pragma solidity ^0.8.0;
 
 import {ERC721} from "solmate/tokens/ERC721.sol";
-import "./LlamaPayV2PayerNoYield.sol";
+import "./LlamaPayV2Payer.sol";
 
 /// @title LlamaPay V2 Factory Contract
 /// @author nemusona
@@ -24,10 +24,10 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
 
     /// @notice create a llamapay contract for payer
     /// @param _payer owner of new contract
-    function createLlamaPayContract(address _payer) external returns(LlamaPayV2PayerNoYield payerContract) {
+    function createLlamaPayContract(address _payer) external returns(LlamaPayV2Payer payerContract) {
         unchecked {
             parameter = _payer;
-            payerContract = new LlamaPayV2PayerNoYield();
+            payerContract = new LlamaPayV2Payer();
             address llamapay = address(payerContract);
             llamaPayContracts[llamaPayIndex] = llamapay;
             llamaPayAddressToIndex[llamapay] = llamaPayIndex;
@@ -37,7 +37,7 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
 
     /// @notice mint new stream token for payee
     /// @param _recipient payee
-    function mint(address _recipient) external returns (uint id) {
+    function mint(address _recipient) external returns (bool, uint id) {
         require(llamaPayAddressToIndex[msg.sender] != 0, "msg.sender not payer contract");
         unchecked {    
             id = tokenId;
@@ -45,7 +45,7 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
             tokenIdToLlamaPayAddress[id] = msg.sender;
             tokenId++;
         }
-        return id;
+        return (true, id);
     }
 
      /// @notice burn existing stream when cancelled
@@ -54,6 +54,14 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
         require(msg.sender == tokenIdToLlamaPayAddress[_id], "msg.sender not payer contract");
         unchecked {
             _burn(_id);
+        }
+        return true;
+    }
+
+    function transferToken( address _from, address _to, uint _id) external returns (bool) {
+        require(msg.sender == tokenIdToLlamaPayAddress[_id], "msg.sender not payer contract");
+        unchecked {
+            safeTransferFrom(_from, _to, _id);
         }
         return true;
     }
