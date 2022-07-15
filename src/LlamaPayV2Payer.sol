@@ -41,6 +41,17 @@ contract LlamaPayV2Payer {
     mapping(uint => Stream) public streams;
     mapping(uint => address) public streamedFrom;
 
+    event Deposit(address indexed from, address indexed token, address indexed vault, uint amount);
+    event PayerWithdraw(address indexed vault, uint amount);
+    event Withdraw(uint id, uint amount, address indexed payee);
+    event StreamCreated(uint id, address indexed vault, address indexed payee, uint216 amountPerSec);
+    event StreamCancelled(uint id);
+    event StreamPaused(uint id);
+    event StreamResumed(uint id);
+    event StreamModified(uint id, address indexed newVault, address newPayee, uint216 newAmountPerSec);
+    event OwnershipTransferred(address indexed from, address indexed to);
+    event OwnershipApplied(address indexed owner);
+
     constructor() {
         factory = msg.sender;
         owner = Factory(msg.sender).payer();
@@ -57,6 +68,8 @@ contract LlamaPayV2Payer {
         ERC4626(_vault).deposit(_amount, address(this));
         uint8 decimals = ERC20(_token).decimals();
         vaults[_vault].balance += _amount * (10 ** (20 - decimals));
+
+        emit Deposit(msg.sender, _token, _vault, _amount);
     }
 
     /// @notice updates vault balances and distribute yield to payer
@@ -90,6 +103,8 @@ contract LlamaPayV2Payer {
         uint8 decimals = ERC4626(_vault).asset().decimals();
         uint toWithdraw = _amount / (10 ** (20 - decimals));
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
+
+        emit PayerWithdraw(_vault, _amount);
     }
 
     /// @notice withdraw tokens to payee
@@ -113,6 +128,8 @@ contract LlamaPayV2Payer {
         vaults[from].balance += yieldEarned;
         uint toWithdraw = (_amount + yieldEarned) / (10 ** (20 - decimals));
         ERC4626(from).withdraw(toWithdraw, payee, address(this));
+
+        emit Withdraw(_id, toWithdraw, payee);
     }
 
     function createStream(address _vault, address _payee, uint216 _amountPerSec) external {
@@ -131,6 +148,8 @@ contract LlamaPayV2Payer {
             lastStreamUpdate: uint40(block.timestamp)
         });
         streamedFrom[id] = _vault;
+
+        emit StreamCreated(id, _vault, _payee, _amountPerSec);
     }
 
     /// @notice cancel and burn stream
@@ -144,6 +163,8 @@ contract LlamaPayV2Payer {
         streams[_id].lastStreamUpdate = 0;
         bool burned = Factory(factory).burn(_id);
         require(burned, "failed to burn stream");
+
+        emit StreamCancelled(_id);
     }
 
     /// @notice "cancel stream" without burning the nft so you can resume it later
@@ -154,6 +175,8 @@ contract LlamaPayV2Payer {
         withdraw(_id, withdrawable);
         vaults[streamedFrom[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
         streams[_id].lastStreamUpdate = 0;
+
+        emit StreamPaused(_id);
     }
     /// @notice resume a paused stream essentially creating stream without minting new token
     /// @param _id token id
@@ -167,6 +190,8 @@ contract LlamaPayV2Payer {
         require(vaults[vault].lastUpdate == block.timestamp, "in debt");
         streams[_id].lastStreamUpdate = uint40(block.timestamp);
         vaults[vault].totalPaidPerSec += stream.amountPerSec;
+
+        StreamResumed(_id);
     }
 
     function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
@@ -194,19 +219,22 @@ contract LlamaPayV2Payer {
             require(transferred, "failed to transfer stream");
         }
 
+        StreamModified(_id, _newVault, _newPayee, _newAmountPerSec);
     }
 
     /// @notice Change future owner 
     /// @param _futureOwner future owner
     function transferOwnership(address _futureOwner) external {
-    require(msg.sender == owner, "not owner");
+        require(msg.sender == owner, "not owner");
         futureOwner = _futureOwner;
+        OwnershipTransferred(msg.sender, _futureOwner);
     }
 
     /// @notice Apply future owner as current owner
     function applyTransferOwnership() external {
         require(msg.sender == futureOwner, "not future owner");
         owner = msg.sender;
+        OwnershipApplied(msg.sender);
     }
 
     /// @notice gets yield earned per token 
