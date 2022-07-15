@@ -191,7 +191,7 @@ contract LlamaPayV2Payer {
         streams[_id].lastStreamUpdate = uint40(block.timestamp);
         vaults[vault].totalPaidPerSec += stream.amountPerSec;
 
-        StreamResumed(_id);
+        emit StreamResumed(_id);
     }
 
     function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
@@ -219,7 +219,7 @@ contract LlamaPayV2Payer {
             require(transferred, "failed to transfer stream");
         }
 
-        StreamModified(_id, _newVault, _newPayee, _newAmountPerSec);
+        emit StreamModified(_id, _newVault, _newPayee, _newAmountPerSec);
     }
 
     /// @notice Change future owner 
@@ -227,14 +227,14 @@ contract LlamaPayV2Payer {
     function transferOwnership(address _futureOwner) external {
         require(msg.sender == owner, "not owner");
         futureOwner = _futureOwner;
-        OwnershipTransferred(msg.sender, _futureOwner);
+        emit OwnershipTransferred(owner, _futureOwner);
     }
 
     /// @notice Apply future owner as current owner
     function applyTransferOwnership() external {
         require(msg.sender == futureOwner, "not future owner");
         owner = msg.sender;
-        OwnershipApplied(msg.sender);
+        emit OwnershipApplied(owner);
     }
 
     /// @notice gets yield earned per token 

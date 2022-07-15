@@ -12,7 +12,7 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
     uint public tokenId;
     uint public llamaPayIndex;
     address public payer;
-    address immutable public bot;
+    address immutable public bot = address(0); // Add something here in the future
 
     mapping(uint => address) public llamaPayContracts;
     mapping(address => uint) public llamaPayAddressToIndex;
@@ -20,10 +20,9 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
 
     event LlamaPayContractCreated(address payer, address llamaPayContract);
 
-    constructor(address _bot) {
+    constructor() {
         llamaPayIndex = 1;
         tokenId = 1;
-        bot = _bot;
     }
 
     /// @notice create a llamapay contract for payer
