@@ -52,6 +52,9 @@ contract LlamaPayV2Payer {
     event OwnershipTransferred(address indexed from, address indexed to);
     event OwnershipApplied(address indexed owner);
 
+    event CreateStreamScheduled(uint40 toExecute, address indexed vault, address indexed payee, uint216 amountPerSec);
+    event CancelStreamScheduled(uint40 toExecute, uint id);
+
     constructor() {
         factory = msg.sender;
         owner = Factory(msg.sender).payer();
@@ -152,6 +155,12 @@ contract LlamaPayV2Payer {
         emit StreamCreated(id, _vault, _payee, _amountPerSec);
     }
 
+    function scheduleCreateStream(uint40 _toExecute, address _vault, address _payee, uint216 _amountPerSec) external {
+        require(msg.sender == owner, "not owner");
+        
+        emit CreateStreamScheduled(_toExecute, _vault, _payee, _amountPerSec);
+    }
+
     /// @notice cancel and burn stream
     /// @param _id token id
     function cancelStream(uint _id) external {
@@ -167,10 +176,16 @@ contract LlamaPayV2Payer {
         emit StreamCancelled(_id);
     }
 
+    function scheduleCancelStream(uint40 _toExecute, uint _id) external {
+        require(msg.sender == owner, "not owner");
+
+        emit CancelStreamScheduled(_toExecute, _id);
+    }
+
     /// @notice "cancel stream" without burning the nft so you can resume it later
     /// @param _id token id
     function pauseStream(uint _id) external {
-        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
+        require(msg.sender == owner, "not owner");
         uint withdrawable = getWithdrawable(_id);
         withdraw(_id, withdrawable);
         vaults[streamedFrom[_id]].totalPaidPerSec -= streams[_id].amountPerSec;
@@ -181,7 +196,7 @@ contract LlamaPayV2Payer {
     /// @notice resume a paused stream essentially creating stream without minting new token
     /// @param _id token id
     function resumeStream(uint _id) external {
-        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
+        require(msg.sender == owner, "not owner");
         require(ERC721(factory).ownerOf(_id) != address(0), "stream burned");
         Stream storage stream = streams[_id];
         require(stream.lastStreamUpdate == 0, "stream is not paused");
@@ -195,7 +210,7 @@ contract LlamaPayV2Payer {
     }
 
     function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
-        require(msg.sender == owner || msg.sender == bot, "not owner or bot");
+        require(msg.sender == owner, "not owner");
 
         uint withdrawable = getWithdrawable(_id);
         withdraw(_id, withdrawable);
