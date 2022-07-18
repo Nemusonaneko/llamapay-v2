@@ -10,9 +10,11 @@ import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 interface Factory {
     function payer() external view returns (address);
     function bot() external view returns (address);
+    function ownerToContract(address) external view returns (address);
     function mint(address _recipient) external returns (bool, uint id);
     function burn(uint id) external returns (bool);
     function transferToken( address _from, address _to, uint _id) external returns (bool);
+    function transferLlamaPayContract(address _from, address _to) external returns (bool);
 }
 
 /// @title LlamaPay V2 Payer Contract
@@ -67,8 +69,9 @@ contract LlamaPayV2Payer {
         ERC20(_token).safeApprove(_vault, _amount); 
         ERC4626(_vault).deposit(_amount, address(this));
         uint8 decimals = ERC20(_token).decimals();
+        uint toAdd;
         unchecked {
-            uint toAdd = _amount * (10 ** (20 - decimals));
+            toAdd = _amount * (10 ** (20 - decimals));
         }
         vaults[_vault].balance += toAdd;
 
@@ -106,8 +109,9 @@ contract LlamaPayV2Payer {
         require(block.timestamp == vaults[_vault].lastUpdate, "in debt");
 
         uint8 decimals = ERC4626(_vault).asset().decimals();
+        uint toWithdraw;
         unchecked {
-            uint toWithdraw = _amount / (10 ** (20 - decimals));
+            toWithdraw = _amount / (10 ** (20 - decimals));
         }
         ERC4626(_vault).withdraw(toWithdraw, owner, address(this));
 
@@ -129,11 +133,13 @@ contract LlamaPayV2Payer {
         uint availableToWithdraw = (vault.lastUpdate - stream.lastStreamUpdate) * stream.amountPerSec;
         require(availableToWithdraw >= _amount, "available < amount to withdraw");
         uint8 decimals = ERC4626(from).asset().decimals();
+        uint toWithdraw;
+        uint yieldEarned;
         unchecked {
             uint earnedPerToken = getEarnedPerToken(from) / 2;
             streams[_id].lastStreamUpdate += uint40(_amount / stream.amountPerSec);
-            uint yieldEarned = _amount * earnedPerToken;
-            uint toWithdraw = (_amount + yieldEarned) / (10 ** (20 - decimals));
+            yieldEarned = _amount * earnedPerToken;
+            toWithdraw = (_amount + yieldEarned) / (10 ** (20 - decimals));
         }
         vaults[from].balance += yieldEarned;
         vaults[from].balance -= _amount;
@@ -235,6 +241,7 @@ contract LlamaPayV2Payer {
     /// @param _futureOwner future owner
     function transferOwnership(address _futureOwner) external {
         require(msg.sender == owner, "not owner");
+        require(Factory(factory).ownerToContract(_futureOwner) == address(0), "future owner already has an existing contract");
         futureOwner = _futureOwner;
         emit OwnershipTransferred(owner, _futureOwner);
     }
@@ -242,6 +249,8 @@ contract LlamaPayV2Payer {
     /// @notice Apply future owner as current owner
     function applyTransferOwnership() external {
         require(msg.sender == futureOwner, "not future owner");
+        bool transferred = Factory(factory).transferLlamaPayContract(owner, futureOwner);
+        require(transferred, "failed to transfer ownership");
         owner = msg.sender;
         emit OwnershipApplied(owner);
     }
@@ -282,6 +291,5 @@ contract LlamaPayV2Payer {
         uint earnedPerToken = getEarnedPerToken(streamedFrom[_id]);
         yieldEarnedByStream = withdrawable * earnedPerToken;
     }
-
 
 }
