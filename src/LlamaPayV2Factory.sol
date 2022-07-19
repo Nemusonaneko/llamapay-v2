@@ -61,16 +61,6 @@ contract LlamaPayV2Factory is ERC721("LlamaPayV2-Stream", "LLAMA-V2-STREAM") {
         require(msg.sender == tokenToContract[_id], "not payer contract");
         _burn(_id);
         return true;
-    }   
-
-    /// @notice transfer token
-    /// @param _from token owner
-    /// @param _to new token owner
-    /// @param _id token id
-    function transferToken(address _from, address _to, uint _id) external returns (bool) {
-        require(msg.sender == tokenToContract[_id], "not payer contract");
-        safeTransferFrom(_from, _to, _id);
-        return true;
     }
 
     /// @notice transfer llamapay contract owner

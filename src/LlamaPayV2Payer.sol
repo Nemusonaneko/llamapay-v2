@@ -6,6 +6,7 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC4626} from "solmate/mixins/ERC4626.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
+import "forge-std/console.sol";
 
 interface Factory {
     function payer() external view returns (address);
@@ -30,6 +31,7 @@ contract LlamaPayV2Payer {
 
     struct Vault {
         uint balance;
+        uint deposited;
         uint40 lastUpdate;
         uint216 totalPaidPerSec;
     }
@@ -50,7 +52,7 @@ contract LlamaPayV2Payer {
     event StreamCancelled(uint id);
     event StreamPaused(uint id);
     event StreamResumed(uint id);
-    event StreamModified(uint id, address indexed newVault, address newPayee, uint216 newAmountPerSec);
+    event StreamModified(uint id, uint216 newAmountPerSec);
     event OwnershipTransferred(address indexed from, address indexed to);
     event OwnershipApplied(address indexed owner);
 
@@ -74,6 +76,7 @@ contract LlamaPayV2Payer {
             toAdd = _amount * (10 ** (20 - decimals));
         }
         vaults[_vault].balance += toAdd;
+        vaults[_vault].deposited += toAdd;
 
         emit Deposit(msg.sender, _token, _vault, _amount);
     }
@@ -105,6 +108,7 @@ contract LlamaPayV2Payer {
         
         _updateVault(_vault);
         vaults[_vault].balance -= _amount;
+        vaults[_vault].deposited -= _amount;
 
         require(block.timestamp == vaults[_vault].lastUpdate, "in debt");
 
@@ -123,28 +127,35 @@ contract LlamaPayV2Payer {
     /// @param _amount amount to withdraw (20 decimals)
     function withdraw(uint _id, uint _amount) public {
         Stream storage stream = streams[_id];
-        require(stream.lastStreamUpdate != 0, "stream paused");
+        require(stream.lastStreamUpdate > 0, "stream paused");
 
         address from = streamedFrom[_id];
         address payee = ERC721(factory).ownerOf(_id);
         require(payee != address(0), "stream burned");
+        uint earnedPerToken;
+        unchecked {
+            earnedPerToken = getEarnedPerToken(from) / 2;
+        }
         _updateVault(from);
         Vault storage vault = vaults[from];
-        uint availableToWithdraw = (vault.lastUpdate - stream.lastStreamUpdate) * stream.amountPerSec;
+        uint delta = vault.lastUpdate - stream.lastStreamUpdate;
+        uint availableToWithdraw;
+        unchecked {
+            availableToWithdraw = delta * stream.amountPerSec;
+        }
         require(availableToWithdraw >= _amount, "available < amount to withdraw");
         uint8 decimals = ERC4626(from).asset().decimals();
         uint toWithdraw;
         uint yieldEarned;
         unchecked {
-            uint earnedPerToken = getEarnedPerToken(from) / 2;
             streams[_id].lastStreamUpdate += uint40(_amount / stream.amountPerSec);
             yieldEarned = _amount * earnedPerToken;
             toWithdraw = (_amount + yieldEarned) / (10 ** (20 - decimals));
         }
         vaults[from].balance += yieldEarned;
-        vaults[from].balance -= _amount;
+        vaults[from].deposited -= _amount;
+        
         ERC4626(from).withdraw(toWithdraw, payee, address(this));
-
         emit Withdraw(_id, toWithdraw, payee);
     }
 
@@ -210,31 +221,20 @@ contract LlamaPayV2Payer {
         emit StreamResumed(_id);
     }
 
-    function modifyStream(uint _id, address _newVault, address _newPayee, uint216 _newAmountPerSec) external {
+    function modifyStream(uint _id, uint216 _newAmountPerSec) external {
         require(msg.sender == owner, "not owner");
 
         uint withdrawable = getWithdrawable(_id);
         withdraw(_id, withdrawable);
 
-        address oldVault = streamedFrom[_id];
-
-        if (oldVault != _newVault) {
-            _updateVault(_newVault);
-        }
-        require(vaults[_newVault].lastUpdate == block.timestamp, "payer in debt");
-
-        vaults[oldVault].totalPaidPerSec -= streams[_id].amountPerSec;
-        vaults[_newVault].totalPaidPerSec += _newAmountPerSec;
-        streamedFrom[_id] = _newVault;
+        address from = streamedFrom[_id];
+        require(vaults[from].lastUpdate == block.timestamp, "payer in debt");
+        vaults[from].totalPaidPerSec -= streams[_id].amountPerSec;
+        vaults[from].totalPaidPerSec += _newAmountPerSec;
         streams[_id].amountPerSec = _newAmountPerSec;
         streams[_id].lastStreamUpdate = uint40(block.timestamp);
-        address payee = ERC721(factory).ownerOf(_id);
-        if (payee != _newPayee) {
-            bool transferred = Factory(factory).transferToken(payee, _newPayee, _id);
-            require(transferred, "failed to transfer stream");
-        }
 
-        emit StreamModified(_id, _newVault, _newPayee, _newAmountPerSec);
+        emit StreamModified(_id, _newAmountPerSec);
     }
 
     /// @notice Change future owner 
@@ -261,8 +261,9 @@ contract LlamaPayV2Payer {
     function getEarnedPerToken(address _vault) public view returns (uint earnedPerToken) {
         uint8 decimals = ERC4626(_vault).asset().decimals();
         uint shares = ERC4626(_vault).balanceOf(address(this));
-        uint redeemable = ERC4626(_vault).convertToAssets(shares) * (10 ** (20 - decimals));
-        uint deposited = vaults[_vault].balance;
+        uint redeemable = ERC4626(_vault).convertToAssets(shares);
+        redeemable = redeemable * (10 ** (20 - decimals));
+        uint deposited = vaults[_vault].deposited;
         earnedPerToken = (redeemable - deposited) / deposited;
     }
 
@@ -280,7 +281,7 @@ contract LlamaPayV2Payer {
         } else {
             lastPayerUpdate = vault.lastUpdate + (vault.balance / vault.totalPaidPerSec);
         }
-        withdrawable = (lastPayerUpdate - stream.lastStreamUpdate) * stream.amountPerSec;
+        withdrawable = delta * stream.amountPerSec;
     }
 
     /// @notice get yield earned from stream

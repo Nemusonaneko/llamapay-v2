@@ -43,19 +43,9 @@ contract LlamaPayV2FactoryTest is Test {
         llamaPayFactory.burn(0);
     }
 
-    function testTransferTokenIsRestricted() public {
-        vm.prank(alice);
-        LlamaPayV2Payer payer = llamaPayFactory.createLlamaPayContract();
-        vm.prank(alice);
-        payer.createStream(vault, bob, 10000);
-        vm.prank(alice);
-        vm.expectRevert(bytes("not payer contract"));
-        llamaPayFactory.transferToken(alice, bob, 0);
-    }
-
     function testTransferLlamaPayContractIsRestricted() public {
         vm.prank(alice);
-        LlamaPayV2Payer payer = llamaPayFactory.createLlamaPayContract();
+        llamaPayFactory.createLlamaPayContract();
         vm.prank(alice);
         vm.expectRevert(bytes("not payer contract"));
         llamaPayFactory.transferLlamaPayContract(alice, bob);

@@ -24,7 +24,6 @@ contract LlamaPayV2PayerTest is Test {
         llamaPayFactory = new LlamaPayV2Factory();
         llamaToken = new LlamaToken();
         llamaToken.mint(alice, 10000e18);
-        llamaToken.mint(bob, 10000e18);
         vm.prank(alice);
         llamaPayPayer = llamaPayFactory.createLlamaPayContract();
         llamaVault = new LlamaVault(ERC20(llamaToken));
@@ -32,6 +31,7 @@ contract LlamaPayV2PayerTest is Test {
         llamaToken.approve(address(llamaPayPayer), 1000e18);
         vm.prank(alice);
         llamaPayPayer.deposit(address(llamaToken), address(llamaVault), 1000e18);
+        vm.warp(100 seconds);
     }
 
     function testDeposit() public {
@@ -39,7 +39,7 @@ contract LlamaPayV2PayerTest is Test {
         llamaToken.approve(address(llamaPayPayer), 1000e18);
         vm.prank(alice);
         llamaPayPayer.deposit(address(llamaToken), address(llamaVault), 1000e18);
-        (uint balance,,) = llamaPayPayer.vaults(address(llamaVault));
+        (uint balance,,,) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(llamaVault.balanceOf(address(llamaPayPayer)), 2000e18);
         assertEq(balance, 2000e20);
     }
@@ -49,13 +49,13 @@ contract LlamaPayV2PayerTest is Test {
         llamaToken.approve(address(llamaPayPayer), 1000e18);
         vm.prank(alice);
         llamaPayPayer.deposit(address(llamaToken), address(llamaVault), 1000e18);
-        (uint balance,,) = llamaPayPayer.vaults(address(llamaVault));
+        (uint balance,,,) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(llamaVault.balanceOf(address(llamaPayPayer)), 2000e18);
         assertEq(balance, 2000e20);
 
         vm.prank(alice);
         llamaPayPayer.withdrawPayer(address(llamaVault), 1000e20);
-        (balance,,) = llamaPayPayer.vaults(address(llamaVault));
+        (balance,,,) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(llamaVault.balanceOf(address(llamaPayPayer)), 1000e18);
         assertEq(balance, 1000e20);
     }
@@ -63,18 +63,18 @@ contract LlamaPayV2PayerTest is Test {
     function testCreateStream() public {
         vm.prank(alice);
         llamaPayPayer.createStream(address(llamaVault), bob, 1e20);
-        (,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 1e20);
     }
 
     function testCancelStream() public {
         vm.prank(alice);
         llamaPayPayer.createStream(address(llamaVault), bob, 1e20);
-        (,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 1e20);
         vm.prank(alice);
         llamaPayPayer.cancelStream(0);
-        (,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 0);
         
     }
@@ -82,26 +82,26 @@ contract LlamaPayV2PayerTest is Test {
     function testPauseStream() public {
         vm.prank(alice);
         llamaPayPayer.createStream(address(llamaVault), bob, 1e20);
-        (,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 1e20);
         vm.prank(alice);
         llamaPayPayer.pauseStream(0);
-        (,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 0);
     }
 
     function testResumeStream() public {
         vm.prank(alice);
         llamaPayPayer.createStream(address(llamaVault), bob, 1e20);
-        (,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,uint216 totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 1e20);
         vm.prank(alice);
         llamaPayPayer.pauseStream(0);
-        (,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 0);
         vm.prank(alice);
         llamaPayPayer.resumeStream(0);
-        (,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
+        (,,,totalPaidPerSec) = llamaPayPayer.vaults(address(llamaVault));
         assertEq(totalPaidPerSec, 1e20);
     }
 
@@ -120,6 +120,22 @@ contract LlamaPayV2PayerTest is Test {
         assertEq(llamaPayPayer.owner(), bob);
     }
 
+    function testWithdraw() public {
+        vm.prank(alice);
+        llamaPayPayer.createStream(address(llamaVault), bob, 1e20);
+        vm.warp(1 days);
+        llamaPayPayer.withdraw(0, 1000e20);
+        assertEq(llamaToken.balanceOf(bob), 1000e18);
+        (uint balance,,,) = llamaPayPayer.vaults(address(llamaVault));
+        assertEq(balance, 0);
+        assertEq(llamaVault.totalAssets(), 0);
+    }
 
+    function testModifyStream() public {
+        vm.prank(alice);
+        llamaPayPayer.createStream(address(llamaVault), bob, 1e20);
+        vm.prank(alice);
+        llamaPayPayer.modifyStream(0, 2e20);
+    }
 
 }
