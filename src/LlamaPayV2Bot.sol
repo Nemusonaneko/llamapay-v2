@@ -16,7 +16,7 @@ interface Payer {
 
 contract LlamaPayV2Bot is BoringBatchable {
 
-    address public bot;
+    address public bot = address(0);
     address public llama = address(0);
 
     event CreateStreamScheduled(address indexed payer, address indexed vault, address indexed payee, uint216 amountPerSec, uint40 execution);
@@ -27,11 +27,6 @@ contract LlamaPayV2Bot is BoringBatchable {
     event CancelStreamExecuted(address indexed payer, uint id);
     event WithdrawExecuted(address indexed payer, uint id);
     event ExecuteFailed(address indexed payer, bytes data);
-    
-
-    constructor(address _bot) {
-        bot = _bot;
-    }
 
     mapping(address => uint) public balances;
 
@@ -96,10 +91,11 @@ contract LlamaPayV2Bot is BoringBatchable {
         uint len = calls.length;
         uint startGas = gasleft();
         for (i = 0; i < len; ++i) {
-            (bool success,) = address(this).delegatecall(calls[i]);
+            bytes calldata call = calls[i];
+            (bool success,) = address(this).delegatecall(call);
             // dunno if worth it tbh
             if (!success) {
-                emit ExecuteFailed(_payer, calls[i]);
+                emit ExecuteFailed(_payer, call);
             }
         }
         uint gasUsed = (startGas - gasleft()) + 21000;
